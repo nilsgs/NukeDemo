@@ -1,0 +1,142 @@
+-------------------------------------------------------------------------------------
+
+<PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net6.0</TargetFramework>
+    <RootNamespace>Buildz</RootNamespace>
+    <NoWarn>CS0649;CS0169</NoWarn>
+    <NukeRootDirectory>..</NukeRootDirectory>
+    <NukeScriptDirectory>..</NukeScriptDirectory>
+    <NukeTelemetryVersion>1</NukeTelemetryVersion>
+    <LangVersion>preview</LangVersion>
+  </PropertyGroup>
+
+--------------------------------------------------------------------------------------
+
+using Nuke.Common;
+using Nuke.Common.ProjectModel;
+using Nuke.Common.Tools.DotNet;
+using static Nuke.Common.Tools.DotNet.DotNetTasks;
+
+namespace Buildz;
+
+class Build : NukeBuild
+{
+    public static int Main () => Execute<Build>(x => x.Compile);
+
+    [Parameter("Configuration to build - Default is 'Debug' (local) or 'Release' (server)")]
+    readonly Configuration Configuration = IsLocalBuild ? Configuration.Debug : Configuration.Release;
+
+    [Solution(GenerateProjects = true)] readonly Solution Solution;
+
+    Target Clean => _ => _
+        .Before(Restore)
+        .Executes(() =>
+        {
+            DotNetClean(_ => _
+                .SetProject(Solution.Blapi));
+        });
+
+    Target Restore => _ => _
+        .Executes(() =>
+        {
+            DotNetRestore(_ => _
+                .SetProjectFile(Solution.Blapi));
+        });
+
+    Target Compile => _ => _
+        .DependsOn(Restore)
+        .Executes(() =>
+        {
+            DotNetBuild(_ => _
+                .SetProjectFile(Solution.Blapi)
+                .SetConfiguration(Configuration));
+        });
+
+}
+
+-------------------------------------------------------------------------------------------------------------
+
+using Nuke.Common;
+using Nuke.Common.ProjectModel;
+using Nuke.Common.Tools.DotNet;
+using static Nuke.Common.Tools.DotNet.DotNetTasks;
+
+namespace Buildz;
+
+interface IHazConfiguration : INukeBuild
+{
+    [Parameter]
+    Configuration Configuration => TryGetValue(() => Configuration) ??
+                                   (IsLocalBuild ? Configuration.Debug : Configuration.Release);
+}
+
+interface IHazSolution : INukeBuild
+{
+    [Solution(GenerateProjects = true)]
+    [Required]
+    public Solution Solution => TryGetValue(() => Solution);
+}
+
+interface IClean : IHazSolution
+{
+    Target Clean => _ => _
+        .Executes(() =>
+        {
+            DotNetClean(_ => _
+                .SetProject(Solution));
+        });
+}
+
+interface IRestore : IClean
+{
+    Target Restore => _ => _
+        .DependsOn(Clean)
+        .Executes(() =>
+        {
+            DotNetRestore(_ => _
+                .SetProjectFile(Solution));
+        });
+}
+
+interface ICompile : IRestore, IHazConfiguration
+{
+    Target Compile => _ => _
+        .DependsOn(Restore)
+        .Executes(() =>
+        {
+            DotNetBuild(_ => _
+                .SetProjectFile(Solution)
+                .SetConfiguration(Configuration));
+        });
+}
+
+-------------------------------------------------------------------------------
+
+using Nuke.Common;
+
+namespace Buildz;
+
+class Build : NukeBuild, ICompile
+{
+    public static int Main () => Execute<Build>(x => ((ICompile)x).Compile);
+}
+
+-------------------------------------------------------------------------------
+
+using Nuke.Common.CI.AzurePipelines;
+
+[AzurePipelines(
+    AzurePipelinesImage.UbuntuLatest,
+    InvokedTargets = new [] { nameof(ICompile.Compile)},
+    TriggerBranchesInclude = new [] { "main", "feature/*"})]
+
+--------------------------------------------------------------------------------
+
+using Nuke.Common.CI.GitHubActions;
+
+[GitHubActions(
+    "continuous",
+    GitHubActionsImage.UbuntuLatest,
+    On = new [] { GitHubActionsTrigger.Push },
+    InvokedTargets = new[] { nameof(ICompile.Compile) })]
